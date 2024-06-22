@@ -1,13 +1,3 @@
-#  #!/usr/bin/env python
-#  -*- coding:utf-8 -*-
-#  Copyleft (C) 2024 proanimer, Inc. All Rights Reserved
-#   author:proanimer
-#   createTime:2024/6/22 下午9:08
-#   lastModifiedTime:2024/6/22 下午9:07
-#   file:train.py
-#   software: classicNets
-#
-
 import argparse
 import glob
 import logging
@@ -39,7 +29,6 @@ train_path_dir = "/home/data/"
 save_base_dir = "/project/train/models/"
 # 训练模型
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 logging.getLogger().setLevel(logging.INFO)
 
 
@@ -103,7 +92,7 @@ def load_model(model_name="UNet"):
     return model, start_epoch
 
 
-def train_model(amp_enabled=True, gradient_clipping=None, tensorboard_writer_enabled=False, evaluater_enabled=False):
+def train_model(amp_enabled=Configure.ENABLE_AMP, gradient_clipping=None, tensorboard_writer_enabled=False, evaluater_enabled=False):
     train_metrics = None
     grad_scaler = None
     writer = None
@@ -126,15 +115,17 @@ def train_model(amp_enabled=True, gradient_clipping=None, tensorboard_writer_ena
         initial_weights = torch.tensor([1 / pixel_percentage[key] for key in pixel_percentage], dtype=torch.float32)
         if Configure.WEIGHTED_TYPE == WeightedType.class_type:
             # 标准化权重，使其和等于类别数
-            weights = initial_weights / initial_weights.sum() * len(initial_weights)
+            weights = initial_weights/ initial_weights.sum() * len(initial_weights)
         else:
             weights = initial_weights.softmax(dim=-1)
         weights = weights.to(device)
     if Configure.PLAIN_LOSS:
-        criterion = nn.CrossEntropyLoss(
-            weight=weights) if Configure.NUM_CLASSES > 1 else nn.BCEWithLogitsLoss()
+            criterion = nn.CrossEntropyLoss(
+                weight=weights) if Configure.NUM_CLASSES > 1 else nn.BCEWithLogitsLoss()
     else:
-        criterion = CombinedLoss()
+            criterion = CombinedLoss()
+    criterion = nn.CrossEntropyLoss(
+        weight=weights) if Configure.NUM_CLASSES > 1 else nn.BCEWithLogitsLoss()
     # 创建数据集实例
     transforms = get_train_transforms()
     dataset = GarbageData(train_path_dir, transforms)
@@ -185,9 +176,9 @@ def train_model(amp_enabled=True, gradient_clipping=None, tensorboard_writer_ena
             masks = masks.to(device)
             # 使用自动混合精度
             if amp_enabled:
-                with (torch.autocast("cuda", dtype=torch.float16, enabled=amp_enabled)):
+                with torch.autocast("cuda", dtype=torch.float16, enabled=amp_enabled):
                     # 前向传播
-                    outputs = model(images)  # [1,NUM_CLASS,H,W]
+                    outputs = model(images)
                     # 计算损失
                     if Configure.PLAIN_LOSS:
                         if Configure.NUM_CLASSES == 1:
@@ -209,19 +200,21 @@ def train_model(amp_enabled=True, gradient_clipping=None, tensorboard_writer_ena
                 outputs = model(images)
                 # 计算损失
                 if Configure.PLAIN_LOSS:
-                    if Configure.NUM_CLASSES == 1:
-                        loss = criterion(outputs.squeeze(1), masks.float())
-                        loss += dice_loss_multi_class(F.sigmoid(outputs.squeeze(1)), masks.float(),
-                                                      multiclass=False)
-                    else:
-                        loss = criterion(outputs, masks)
-                        loss += dice_loss_multi_class(
-                            F.softmax(outputs, dim=1).float(),
-                            F.one_hot(masks, Configure.NUM_CLASSES).permute(0, 3, 1, 2).float(),
-                            multiclass=True
-                        )
+                        
+                        if Configure.NUM_CLASSES == 1:
+                                loss = criterion(outputs.squeeze(1), masks.float())
+                                loss += dice_loss_multi_class(F.sigmoid(outputs.squeeze(1)), masks.float(),
+                                                          multiclass=False)
+                        else:
+                                loss = criterion(outputs, masks)
+                                loss += dice_loss_multi_class(
+                                F.softmax(outputs, dim=1).float(),
+                                F.one_hot(masks, Configure.NUM_CLASSES).permute(0, 3, 1, 2).float(),
+                                multiclass=True
+                            )
                 else:
                     loss = criterion(outputs, masks)
+
 
             # 计算metrics
             if evaluater_enabled:
@@ -249,9 +242,9 @@ def train_model(amp_enabled=True, gradient_clipping=None, tensorboard_writer_ena
                 # 反向传播和优化
                 loss.backward()
                 optimizer.step()
+            scheduler.step()
             pbar.set_description_str(
                 f"Epoch {epoch + 1}/{start_epoch + Configure.NUM_EPOCHES},step:{step + 1}/{len(train_dataloader)}, Loss: {loss.item():.4f}")
-            scheduler.step()
             running_loss += loss.item() * images.size(0)
 
         epoch_loss = running_loss / len(train_dataloader)
