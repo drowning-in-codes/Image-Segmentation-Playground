@@ -1,3 +1,13 @@
+#  #!/usr/bin/env python
+#  -*- coding:utf-8 -*-
+#  Copyleft (C) 2024 proanimer, Inc. All Rights Reserved
+#   author:proanimer
+#   createTime:2024/6/22 下午9:08
+#   lastModifiedTime:2024/6/22 下午9:07
+#   file:train.py
+#   software: classicNets
+#
+
 import argparse
 import glob
 import logging
@@ -198,16 +208,20 @@ def train_model(amp_enabled=True, gradient_clipping=None, tensorboard_writer_ena
                 # 前向传播
                 outputs = model(images)
                 # 计算损失
-                if Configure.NUM_CLASSES == 1:
-                    loss = criterion(outputs.squeeze(1), masks.float())
-                    loss += dice_loss_multi_class(F.sigmoid(outputs.squeeze(1)), masks.float(), multiclass=False)
+                if Configure.PLAIN_LOSS:
+                    if Configure.NUM_CLASSES == 1:
+                        loss = criterion(outputs.squeeze(1), masks.float())
+                        loss += dice_loss_multi_class(F.sigmoid(outputs.squeeze(1)), masks.float(),
+                                                      multiclass=False)
+                    else:
+                        loss = criterion(outputs, masks)
+                        loss += dice_loss_multi_class(
+                            F.softmax(outputs, dim=1).float(),
+                            F.one_hot(masks, Configure.NUM_CLASSES).permute(0, 3, 1, 2).float(),
+                            multiclass=True
+                        )
                 else:
                     loss = criterion(outputs, masks)
-                    loss += dice_loss_multi_class(
-                        F.softmax(outputs, dim=1).float(),
-                        F.one_hot(masks, Configure.NUM_CLASSES).permute(0, 3, 1, 2).float(),
-                        multiclass=True
-                    )
 
             # 计算metrics
             if evaluater_enabled:
