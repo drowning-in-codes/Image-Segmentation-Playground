@@ -1,13 +1,3 @@
-#  #!/usr/bin/env python
-#  -*- coding:utf-8 -*-
-#  Copyleft (C) 2024 proanimer, Inc. All Rights Reserved
-#   author:proanimer
-#   createTime:2024/6/19 下午8:48
-#   lastModifiedTime:2024/6/19 下午8:48
-#   file:dataloader.py
-#   software: classicNets
-#
-
 from constants import Configure
 from torch.utils.data import Dataset
 import numpy as np
@@ -204,7 +194,7 @@ class Compose(object):
 
 # 定义图像增强的Compose函数
 def get_train_transforms(resize=False):
-    comppose_ops = [
+    compose_ops = [
         Pad((Configure.PADDING, Configure.PADDING)),
         RandomCrop((Configure.CROP_SIZE, Configure.CROP_SIZE)),
         RandomHorizontalFlip(flip_prob=Configure.FLIP_PROB),
@@ -216,8 +206,8 @@ def get_train_transforms(resize=False):
         Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]
     if resize:
-        comppose_ops.insert(0, Resize(Configure.IMG_SIZE))
-    transform = Compose(comppose_ops)
+        compose_ops.insert(0, Resize(Configure.IMG_SIZE))
+    transform = Compose(compose_ops)
 
     return transform
 
