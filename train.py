@@ -194,13 +194,11 @@ def train_model(amp_enabled=Configure.ENABLE_AMP, gradient_clipping=None, tensor
                             )
                     else:
                         loss = criterion(outputs, masks)
-
             else:
                 # 前向传播
                 outputs = model(images)
                 # 计算损失
                 if Configure.PLAIN_LOSS:
-                        
                         if Configure.NUM_CLASSES == 1:
                                 loss = criterion(outputs.squeeze(1), masks.float())
                                 loss += dice_loss_multi_class(F.sigmoid(outputs.squeeze(1)), masks.float(),
@@ -214,8 +212,6 @@ def train_model(amp_enabled=Configure.ENABLE_AMP, gradient_clipping=None, tensor
                             )
                 else:
                     loss = criterion(outputs, masks)
-
-
             # 计算metrics
             if evaluater_enabled:
                 pred = outputs.data.cpu().numpy()
