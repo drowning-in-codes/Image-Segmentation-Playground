@@ -55,14 +55,14 @@ def process_image(handle=None, input_image=None, args=None, **kwargs):
     with torch.no_grad():
         for crop in crops:
             if HALF:
-                crop, _ = trans(crop, None)
-                crop = crop.type(torch.HalfTensor).to(device)
+                crop_result, _ = trans(crop, None)
+                crop_result = crop_result.type(torch.HalfTensor).to(device)
             else:
-                crop, _ = trans(crop, None)
-                crop = crop.to(device)  # [3,H,W]
+                crop_result, _ = trans(crop, None)
+                crop_result = crop_result.to(device)  # [3,H,W]
             if crop.ndim == 3:
-                crop = crop.unsqueeze(0)  # [1,3,H,W]
-            seg_mask = handle(crop)  # [1,5,H,W]
+                crop_result = crop_result.unsqueeze(0)  # [1,3,H,W]
+            seg_mask = handle(crop_result)  # [1,5,H,W]
             masks.append(seg_mask)
     full_mask = stitch_masks(masks, input_image.shape[:2])
     pred_mask = np.argmax(full_mask, axis=1)  # [1,H,W]
