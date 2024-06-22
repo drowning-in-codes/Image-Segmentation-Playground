@@ -29,3 +29,4 @@ class Configure:
     ENABLE_HALF = False  # 推理时使用半精度
     THIRD_PARTY_MODEL = True
     PLAIN_LOSS = True
+    ENABLE_AMP = True
