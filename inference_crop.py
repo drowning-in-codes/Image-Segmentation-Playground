@@ -27,7 +27,7 @@ def init():
     """Initialize model
     Returns: model
     """
-    model_name = "NestedUNet"
+    model_name = "UNet"
     assert model_name in ["UNet", "LightUNet", "NestedUNet", "PAN"], "其他模型暂不支持"
     model = eval(model_name)()
     logging.info("------------------------------start inference {}-----------------------".format(model_name))
