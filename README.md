@@ -13,6 +13,10 @@
 快速上手
 要开始使用,请克隆本仓库并按照 README 中的说明进行操作。您将找到详细的设置说明,包括环境配置和数据集准备。
 
+除了常用的torch之外,你可能额外需要安装
+```
+pip install -U segmentation-models-pytorch
+```
 
 ```
 git clone https://github.com/drowning-in-codes/Image-Segmentation-Playground.git
@@ -41,6 +45,11 @@ In this repository, you will find implementations of several popular semantic se
 - **Comprehensive Workflow**: The repository covers the entire semantic segmentation workflow, from dataset preparation to model training, evaluation, and deployment.
 - **Customizable Configurations**: Easily adjust hyperparameters, dataset paths, and other settings to fit your specific needs.
 - **Beginner-Friendly**: The code is structured and commented to be easily understandable for those new to the field of semantic segmentation.
+
+Except for torch and other basic tools,you may also neet to:
+```
+pip install -U segmentation-models-pytorch
+```
 
 ## Getting Started
 
