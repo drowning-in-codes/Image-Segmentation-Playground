@@ -1,165 +1,119 @@
-import logging
-import glob
 import json
 import torch
 from PIL import Image
-from models import UNet
+from models import NestedUNet, LightUNet, UNet
 import cv2
 import json
 import os
-import re
+import glob
+import logging
 import numpy as np
 from torchvision import transforms
 from torchvision.transforms import Compose
 from constants import Configure
+from utils import generate_all_objs, load_test_model
+from dataloader import get_test_transforms
 
+model_dir = "/project/train/models/"
 device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
-mappings = {1: "algae", 2: "dead_twigs_leaves", 3: "garbage", 4: "water"}
-mappings_num_obj = {1: 2, 2: 2, 3: 5, 4: 1}
+
+Half = Configure.ENABLE_HALF
+logging.getLogger().setLevel(logging.INFO)
 
 
-def detect(pred_mask, detect_obj_index=3):
-    # pred_mask [H,W,1]
-    binary_mask = np.where(pred_mask == detect_obj_index, 1, 0).astype(np.uint8) * 255
-    # 连通域分析
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
-    # 遍历连通域分析结果，获取每个区域的掩码
-    # 没有连通的当作新的物体
-    masks = []
-    # 获取连通组件的面积
-    areas = stats[:, cv2.CC_STAT_AREA]
-    # 根据面积大小进行排序
-    sorted_indices = np.argsort(areas)[::-1]  # 降序排列的索引
-    min_num_labels = min(num_labels, mappings_num_obj[detect_obj_index])
-    index = 1
-    for label in sorted_indices:
-        if label == 0:
-            """
-            表示背景,跳过
-            """
-            continue
-        # 获得每个不连通的物体
-        # region_mask = np.uint8(labels == label) * 255  # 获取当前标签对应的区域掩码
-        region_stats = stats[label]  # 获取当前标签对应的区域统计信息
-        # 将面积较小的东西排除掉
-        width, height = region_stats[2:4]
-        if width * height < Configure.EXCLUDE_AREA:
-            break
-        masks.append(region_stats)
-        if index >= min_num_labels:
-            break
-        index += 1
+@torch.no_grad()
+def init():
+    """Initialize model
+    Returns: model
+    """
+    model_name = "UNet"
+    assert model_name in ["UNet", "LightUNet", "NestedUNet", "PAN"], "其他模型暂不支持"
+    model = eval(model_name)()
+    logging.info("------------------------------start inference {}-----------------------".format(model_name))
+    model, _ = load_test_model(model_dir, model, Half)
+    return model
 
-    object_infos = []
-    for region_idx, region_stats in enumerate(masks):
-        x, y = region_stats[:2]
-        width, height = region_stats[2:4]
-        area_ratio = float(region_stats[cv2.CC_STAT_AREA] / (width * height))
-        object_info = {
-            "x": int(x),
-            "y": int(y),
-            "width": int(width),
-            "height": int(height),
-            "name": mappings[detect_obj_index],
-            "area_ratio": area_ratio
+
+def process_image(handle=None, input_image=None, args=None, **kwargs):
+    """Do inference to analysis input_image and get output
+    Attributes:
+        handle: algorithm handle returned by init()
+        input_image (numpy.ndarray): image to be process, format: (h, w, c), BGR
+        args: string in JSON format, format: {
+            "mask_output_path": "/path/to/output/mask.png"
         }
-        object_infos.append(object_info)
 
-    return object_infos
-
-
-def generate_all_objs(pred_mask):
-    objects_infos = []
-    garbage_data = []
-    for idx, obj_type in mappings.items():
-        obj_info = detect(pred_mask, idx)
-        if idx == 3:
-            garbage_data = obj_info
-        objects_infos.extend(obj_info)
-
-    return garbage_data, objects_infos
-
-
-def load_model(model_path_base, instance_model, must_load_checkpoint=False):
-    start_epoch = 0
-    model_files = glob.glob(f"{model_path_base}/model_*.pth")
-
-    if must_load_checkpoint:
-        assert len(model_files) >= 1, "没有找到匹配模型"
+    Returns: process result
+    """
+    torch.cuda.empty_cache()
+    args = json.loads(args)
+    mask_output_path = args.get("mask_output_path")
+    # Process image here
+    input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB).astype(np.uint8)
+    trans = get_test_transforms()
+    if Half:
+        input_data, _ = trans(input_image, None)
+        input_data = input_data.type(torch.HalfTensor).to(device)
     else:
-        if len(model_files) == 0:
-            logging.info("train from scratch")
-            instance_model.train()
-            instance_model.to(device=device)
-            return instance_model, start_epoch
+        input_data, _ = trans(input_image, None)
+        input_data = input_data.to(device)
+    if input_data.ndim == 3:
+        input_data = input_data.unsqueeze(0)  # [1,3,H,W]
+    with torch.no_grad():
+        output = handle(input_data)  # [1,5,H,W]
+    pred_mask = np.argmax(output.data.cpu().numpy(), axis=1)  # [1,H,W]
+    pred_mask = np.transpose(pred_mask, (1, 2, 0))
+    garbage_obj, all_objects = generate_all_objs(pred_mask)  # 检测垃圾
+    target_count = len(garbage_obj)
+    is_alert = True if target_count > 0 else False
+    res = {
+        "algorithm_data": {
+            "is_alert": is_alert,
+            "target_count": target_count,
+            "target_info": garbage_obj
+        },
+        "model_data": {
+            "objects": all_objects,
+        },
+    }
+    if mask_output_path is not None and mask_output_path != "":
+        # generate mask pic
+        mask_data = pred_mask.astype(np.uint8)
+        pred_mask_per_frame = Image.fromarray(mask_data[..., 0], mode="L")
+        pred_mask_per_frame.save(mask_output_path)
+        res["model_data"]["mask"] = mask_output_path
 
-    latest_model_file = max(model_files, key=lambda f: int(re.search(r'\d+', f).group()))
-    start_epoch = int(re.search(r'\d+', latest_model_file).group())
-    checkpoint = torch.load(os.path.join(model_path_base, latest_model_file))
-
-    instance_model.load_state_dict(checkpoint)
-    instance_model.train()
-    instance_model.to(device=device)
-    logging.info("train from epoch {}".format(start_epoch))
-
-    return instance_model, start_epoch
-
-
-def load_test_model(model_path_base, instance_model, enable_HALF=True, must_load_checkpoint=False):
-    start_epoch = 0
-    model_files = glob.glob(f"{model_path_base}/model_*.pth")
-
-    if must_load_checkpoint:
-        assert len(model_files) >= 1, "没有找到匹配模型"
-    else:
-        if len(model_files) == 0:
-            logging.info("------------------inference from scratch------------------")
-            if enable_HALF:
-                instance_model.half()
-            instance_model.eval()
-            instance_model.to(device=device)
-            return instance_model, start_epoch
-
-    latest_model_file = max(model_files, key=lambda f: int(re.search(r'\d+', f).group()))
-    start_epoch = int(re.search(r'\d+', latest_model_file).group())
-    checkpoint = torch.load(os.path.join(model_path_base, latest_model_file))
-
-    instance_model.load_state_dict(checkpoint)
-    if enable_HALF:
-        instance_model.half()
-    instance_model.eval()
-    instance_model.to(device=device)
-    logging.info("------------------inference at epoch {}------------------".format(start_epoch))
-
-    return instance_model, start_epoch
+    # 删除不再需要的数据
+    del pred_mask
+    del input_data
+    del input_image
+    torch.cuda.empty_cache()
+    return json.dumps(res, indent=4)
 
 
-def stitch_masks(masks, original_shape, crop_size=Configure.GRID_SIZE, num_classes=Configure.NUM_CLASSES):
-    height, width = original_shape
-    full_mask = np.zeros((1, num_classes, height, width), dtype=np.uint8)
-    index = 0
-    for y in range(0, height, crop_size):
-        for x in range(0, width, crop_size):
-            mask = masks[index].cpu().numpy()
-            h = min(crop_size, height - y)
-            w = min(crop_size, width - x)
-            full_mask[:, :, y:y + h, x:x + w] = mask[:, :, :h, :w]
-            index += 1
-    return full_mask
+if __name__ == '__main__':
+    path_base = "/home/data/3288"
+    img_files = glob.glob(os.path.join(path_base, "*.jpg"))
+    mask_files = glob.glob(os.path.join(path_base, "*.png"))
+    idx = 2
 
+    image_data = cv2.imread(img_files[idx])
+    mask_data = cv2.imread(mask_files[idx], cv2.IMREAD_GRAYSCALE)
+    print(mask_data.shape)
+    res = process_image(init(), image_data, '{"mask_output_path":"./mask.png"}')
+    # print(res)
 
-def crop_image(image, crop_size=Configure.GRID_SIZE):
-    # image [H,W,3]
-    height, width, channels = image.shape
-    crops = []
-    for y in range(0, height, crop_size):
-        for x in range(0, width, crop_size):
-            h = min(crop_size, height - y)
-            w = min(crop_size, width - x)
-            crop = image[y:y + h, x:x + w, :]
-            pad_h = crop_size - h
-            pad_w = crop_size - w
-            if pad_h > 0 or pad_w > 0:
-                crop = np.pad(crop, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant')
-            crops.append(crop)
-    return crops
+    garbage_obj, all_objects = generate_all_objs(mask_data)
+    target_count = len(garbage_obj)
+    is_alert = True if target_count > 0 else False
+    gt_res = {
+        "algorithm_data": {
+            "is_alert": is_alert,
+            "target_count": target_count,
+            "target_info": garbage_obj
+        },
+        "model_data": {
+            "objects": all_objects,
+        },
+    }
+    # print(gt_res)
